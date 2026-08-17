@@ -1,7 +1,74 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: yomiage_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yomiage
+      POSTGRES_USER: yomiage
+      POSTGRES_PASSWORD: change-this-password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yomiage -d yomiage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   voicevox_engine:
     image: voicevox/voicevox_engine:cpu-latest
     container_name: voicevox_engine
+    restart: unless-stopped
     ports:
       - "50021:50021"
+
+  bot_a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yomiage_bot_a
     restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${BOT_A_TOKEN}
+      VOICEVOX_URL: http://voicevox_engine:50021
+      DATABASE_URL: postgresql://yomiage:change-this-password@postgres:5432/yomiage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      voicevox_engine:
+        condition: service_started
+
+  bot_b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yomiage_bot_b
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${BOT_B_TOKEN}
+      VOICEVOX_URL: http://voicevox_engine:50021
+      DATABASE_URL: postgresql://yomiage:change-this-password@postgres:5432/yomiage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      voicevox_engine:
+        condition: service_started
+
+  bot_c:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yomiage_bot_c
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${BOT_C_TOKEN}
+      VOICEVOX_URL: http://voicevox_engine:50021
+      DATABASE_URL: postgresql://yomiage:change-this-password@postgres:5432/yomiage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      voicevox_engine:
+        condition: service_started
+
+volumes:
+  postgres_data:
