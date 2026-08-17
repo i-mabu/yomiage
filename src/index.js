@@ -30,6 +30,28 @@ const client = new Client({
 // 各サーバーのプレイヤーや状態を管理するマップ
 const connectionMap = new Map();
 
+function convertKaomoji(text) {
+  const kaomojiMap = {
+    "(´・ω・｀)": "しょんぼり",
+    "(´・ω・`)": "しょんぼり",
+    "(´；ω；｀)": "泣き",
+    "(´；ω；`)": "泣き",
+    "＼(^o^)／": "ばんざい",
+    "（＾ω＾）": "にっこり",
+    "(＾ω＾)": "にっこり",
+    ｗｗｗ: "笑い",
+    www: "笑い",
+    WWW: "笑い",
+    笑: "笑い",
+  };
+
+  for (const [kaomoji, reading] of Object.entries(kaomojiMap)) {
+    text = text.replaceAll(kaomoji, reading);
+  }
+
+  return text;
+}
+
 client.once("ready", async () => {
   console.log(`${client.user.tag} がオンラインになりました！`);
 
@@ -116,17 +138,23 @@ client.on("messageCreate", async (message) => {
 
     let text = message.content;
 
-    text = text.replace(/<@!?(\d+)>/g, (_, userId) => {
-      const member = message.guild?.members.cache.get(userId);
-      return (
-        member?.displayName ??
-        message.client.users.cache.get(userId)?.username ??
-        "ユーザー"
-      );
-    });
+    // メンションがある場合だけ、メンションを表示名に変換
+    if (message.mentions.users.size > 0) {
+      text = text.replace(/<@!?(\d+)>/g, (_, userId) => {
+        const member = message.guild?.members.cache.get(userId);
+
+        return (
+          member?.displayName ??
+          message.client.users.cache.get(userId)?.username ??
+          "ユーザー"
+        );
+      });
+    }
+
+    // 顔文字を読み上げ向けに変換
+    text = convertKaomoji(text);
 
     try {
-        
       const queryResponse = await axios.post(
         `${process.env.VOICEVOX_URL}/audio_query?text=${encodeURIComponent(text)}&speaker=3`,
       );
