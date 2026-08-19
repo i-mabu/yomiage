@@ -4,9 +4,7 @@ const fs = require("fs");
 const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
-  throw new Error(
-    "DATABASE_URL が設定されていません。",
-  );
+  throw new Error("DATABASE_URL が設定されていません。");
 }
 
 const pool = new Pool({
