@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const fs = require("fs");
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -10,6 +11,15 @@ if (!databaseUrl) {
 
 const pool = new Pool({
   connectionString: databaseUrl,
+
+  ssl: {
+    ca: fs.readFileSync(
+      "/app/certs/conoha-ca.crt",
+      "utf8",
+    ),
+    rejectUnauthorized: true,
+  },
+
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
