@@ -39,6 +39,17 @@ async function initDatabase() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS guild_dictionary (
+      guild_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      reading TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (guild_id, source)
+    );
+  `);
+
   console.log("PostgreSQLの初期化が完了しました。");
 }
 
@@ -153,6 +164,55 @@ async function setVoiceSettings(
 }
 
 // --------------------------------------------------
+// 辞典
+// --------------------------------------------------
+
+async function getGuildDictionary(guildId) {
+  const result = await pool.query(
+    `
+      SELECT source, reading
+      FROM guild_dictionary
+      WHERE guild_id = $1
+      ORDER BY char_length(source) DESC, source ASC
+    `,
+    [guildId],
+  );
+
+  return result.rows;
+}
+
+async function upsertDictionaryEntry(
+  guildId,
+  source,
+  reading,
+) {
+  await pool.query(
+    `
+      INSERT INTO guild_dictionary (guild_id, source, reading)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (guild_id, source)
+      DO UPDATE SET
+        reading = EXCLUDED.reading,
+        updated_at = NOW()
+    `,
+    [guildId, source, reading],
+  );
+}
+
+async function deleteDictionaryEntry(guildId, source) {
+  const result = await pool.query(
+    `
+      DELETE FROM guild_dictionary
+      WHERE guild_id = $1 AND source = $2
+      RETURNING source, reading
+    `,
+    [guildId, source],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+// --------------------------------------------------
 // DB終了
 // --------------------------------------------------
 
@@ -166,5 +226,8 @@ module.exports = {
   getUserSettings,
   setSpeaker,
   setVoiceSettings,
+  getGuildDictionary,
+  upsertDictionaryEntry,
+  deleteDictionaryEntry,
   closeDatabase,
 };

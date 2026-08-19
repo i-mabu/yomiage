@@ -1,20 +1,4 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: yomiage_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: yomiage
-      POSTGRES_USER: yomiage
-      POSTGRES_PASSWORD: change-this-password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U yomiage -d yomiage"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   voicevox_engine:
     image: voicevox/voicevox_engine:cpu-latest
     container_name: voicevox_engine
@@ -31,10 +15,8 @@ services:
     environment:
       DISCORD_TOKEN: ${BOT_A_TOKEN}
       VOICEVOX_URL: http://voicevox_engine:50021
-      DATABASE_URL: postgresql://yomiage:change-this-password@postgres:5432/yomiage
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
-      postgres:
-        condition: service_healthy
       voicevox_engine:
         condition: service_started
 
@@ -47,10 +29,8 @@ services:
     environment:
       DISCORD_TOKEN: ${BOT_B_TOKEN}
       VOICEVOX_URL: http://voicevox_engine:50021
-      DATABASE_URL: postgresql://yomiage:change-this-password@postgres:5432/yomiage
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
-      postgres:
-        condition: service_healthy
       voicevox_engine:
         condition: service_started
 
@@ -63,12 +43,7 @@ services:
     environment:
       DISCORD_TOKEN: ${BOT_C_TOKEN}
       VOICEVOX_URL: http://voicevox_engine:50021
-      DATABASE_URL: postgresql://yomiage:change-this-password@postgres:5432/yomiage
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
-      postgres:
-        condition: service_healthy
       voicevox_engine:
         condition: service_started
-
-volumes:
-  postgres_data:

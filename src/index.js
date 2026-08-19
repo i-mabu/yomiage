@@ -27,6 +27,9 @@ const {
   initDatabase,
   getUserSettings,
   setSpeaker,
+  getGuildDictionary,
+  upsertDictionaryEntry,
+  deleteDictionaryEntry,
 } = require("./database");
 
 // ==================================================
@@ -287,6 +290,25 @@ function sanitizeMessage(text) {
 }
 
 // ==================================================
+// 辞典
+// ==================================================
+
+async function applyGuildDictionary(guildId, text) {
+  const entries = await getGuildDictionary(guildId);
+
+  for (const entry of entries) {
+    if (!entry.source) {
+      continue;
+    }
+
+    // DB側で表記の長い順に取得しているため、複合語を先に置換する。
+    text = text.split(entry.source).join(entry.reading);
+  }
+
+  return text;
+}
+
+// ==================================================
 // VOICEVOX
 // ==================================================
 
@@ -492,12 +514,17 @@ async function processSpeechQueue(
         item.userId,
       );
 
-    console.log(
-      `[TTS] ` +
-      `[${item.username}] ` +
-      `speaker=${settings.speaker} ` +
-      `"${item.text}"`,
-    );
+      const speechText = await applyGuildDictionary(
+        guildId,
+        item.text,
+      );
+
+      console.log(
+        `[TTS] ` +
+        `[${item.username}] ` +
+        `speaker=${settings.speaker} ` +
+        `"${speechText}"`,
+      );
 
     // ----------------------------------------------
     // Audio Query
@@ -510,9 +537,9 @@ async function processSpeechQueue(
     const queryResponse =
       await axios.post(
         `${process.env.VOICEVOX_URL}/audio_query` +
-          `?text=${encodeURIComponent(
-            item.text,
-          )}` +
+        `?text=${encodeURIComponent(
+          speechText,
+        )}` +
           `&speaker=${settings.speaker}`,
         undefined,
         {
@@ -882,6 +909,40 @@ client.once(
           description:
             "自分の読み上げ音声を設定します",
         },
+        {
+          name: "dict-add",
+          description: "辞典に表記と読みを登録します",
+          options: [
+            {
+              name: "source",
+              description: "読み替える表記",
+              type: 3,
+              required: true,
+            },
+            {
+              name: "reading",
+              description: "VOICEVOXに送る読み",
+              type: 3,
+              required: true,
+            },
+          ],
+        },
+        {
+          name: "dict-delete",
+          description: "辞典から表記を削除します",
+          options: [
+            {
+              name: "source",
+              description: "削除する表記",
+              type: 3,
+              required: true,
+            },
+          ],
+        },
+        {
+          name: "dict-list",
+          description: "このサーバーの辞典を表示します",
+        },
       ];
 
       await client.application.commands.set(
@@ -1103,6 +1164,84 @@ client.on(
           return showVoiceSettings(
             interaction,
           );
+        }
+
+        // ----------------------------------------------
+        // /dict-add
+        // ----------------------------------------------
+
+        if (commandName === "dict-add") {
+          if (!guildId) {
+            return interaction.reply({
+              content: "このコマンドはサーバー内で使用してください。",
+              ephemeral: true,
+            });
+          }
+
+          const source = interaction.options.getString("source", true).trim();
+          const reading = interaction.options.getString("reading", true).trim();
+
+          if (!source || !reading || source.length > 100 || reading.length > 100) {
+            return interaction.reply({
+              content: "表記と読みは1〜100文字で指定してください。",
+              ephemeral: true,
+            });
+          }
+
+          await upsertDictionaryEntry(guildId, source, reading);
+          return interaction.reply({
+            content: `辞典に登録しました。\n「${source}」→「${reading}」`,
+            ephemeral: true,
+          });
+        }
+
+        // ----------------------------------------------
+        // /dict-delete
+        // ----------------------------------------------
+
+        if (commandName === "dict-delete") {
+          if (!guildId) {
+            return interaction.reply({
+              content: "このコマンドはサーバー内で使用してください。",
+              ephemeral: true,
+            });
+          }
+
+          const source = interaction.options.getString("source", true).trim();
+          const deleted = await deleteDictionaryEntry(guildId, source);
+
+          return interaction.reply({
+            content: deleted
+              ? `辞典から削除しました。\n「${deleted.source}」→「${deleted.reading}」`
+              : `辞典に「${source}」は登録されていません。`,
+            ephemeral: true,
+          });
+        }
+
+        // ----------------------------------------------
+        // /dict-list
+        // ----------------------------------------------
+
+        if (commandName === "dict-list") {
+          if (!guildId) {
+            return interaction.reply({
+              content: "このコマンドはサーバー内で使用してください。",
+              ephemeral: true,
+            });
+          }
+
+          const entries = await getGuildDictionary(guildId);
+          const content = entries.length === 0
+            ? "このサーバーの辞典は空です。"
+            : [
+                "このサーバーの辞典:",
+                ...entries.map((entry) => `「${entry.source}」→「${entry.reading}」`),
+              ].join("\n").slice(0, 1900);
+
+          return interaction.reply({
+            content,
+            ephemeral: true,
+          });
         }
 
         return;
