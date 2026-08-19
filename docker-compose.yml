@@ -19,6 +19,8 @@ services:
     depends_on:
       voicevox_engine:
         condition: service_started
+    volumes:
+      - ./certs/conoha-ca.crt:/app/certs/conoha-ca.crt:ro
 
   bot_b:
     build:
@@ -33,6 +35,8 @@ services:
     depends_on:
       voicevox_engine:
         condition: service_started
+    volumes:
+      - ./certs/conoha-ca.crt:/app/certs/conoha-ca.crt:ro
 
   bot_c:
     build:
@@ -47,3 +51,5 @@ services:
     depends_on:
       voicevox_engine:
         condition: service_started
+    volumes:
+      - ./certs/conoha-ca.crt:/app/certs/conoha-ca.crt:ro
