@@ -1,4 +1,4 @@
-const { Pool } = require("pg");
+const mysql = require("mysql2/promise");
 const fs = require("fs");
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -7,58 +7,97 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL が設定されていません。");
 }
 
-const pool = new Pool({
-  connectionString: databaseUrl,
+// --------------------------------------------------
+// MySQL接続
+// --------------------------------------------------
 
-  ssl: {
-    ca: fs.readFileSync(
-      "/app/certs/conoha-ca.crt",
-      "utf8",
-    ),
-    rejectUnauthorized: true,
-  },
+let connectionConfig;
 
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-});
+try {
+  const url = new URL(databaseUrl);
+
+  connectionConfig = {
+    host: url.hostname,
+    port: url.port
+      ? Number(url.port)
+      : 3306,
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: url.pathname.replace(/^\//, ""),
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    charset: "utf8mb4",
+  };
+
+  // SSLが必要な場合のみCA証明書を使用
+  if (process.env.DB_SSL === "true") {
+    connectionConfig.ssl = {
+      ca: fs.readFileSync(
+        "/app/certs/conoha-ca.crt",
+        "utf8",
+      ),
+      rejectUnauthorized: true,
+    };
+  }
+} catch (error) {
+  throw new Error(
+    `DATABASE_URLの解析に失敗しました: ${error.message}`,
+  );
+}
+
+const pool = mysql.createPool(connectionConfig);
 
 // --------------------------------------------------
 // DB初期化
 // --------------------------------------------------
 
 async function initDatabase() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_settings (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
+  const connection = await pool.getConnection();
 
-      speaker INTEGER NOT NULL DEFAULT 3,
+  try {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS user_settings (
+        guild_id VARCHAR(255) NOT NULL,
+        user_id VARCHAR(255) NOT NULL,
 
-      speed_scale DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-      pitch_scale DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-      intonation_scale DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-      volume_scale DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+        speaker INT NOT NULL DEFAULT 3,
 
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        speed_scale DOUBLE NOT NULL DEFAULT 1.0,
+        pitch_scale DOUBLE NOT NULL DEFAULT 0.0,
+        intonation_scale DOUBLE NOT NULL DEFAULT 1.0,
+        volume_scale DOUBLE NOT NULL DEFAULT 1.0,
 
-      PRIMARY KEY (guild_id, user_id)
-    );
-  `);
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          ON UPDATE CURRENT_TIMESTAMP,
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS guild_dictionary (
-      guild_id TEXT NOT NULL,
-      source TEXT NOT NULL,
-      reading TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (guild_id, source)
-    );
-  `);
+        PRIMARY KEY (guild_id, user_id)
+      ) ENGINE=InnoDB
+        DEFAULT CHARSET=utf8mb4
+        COLLATE=utf8mb4_unicode_ci;
+    `);
 
-  console.log("PostgreSQLの初期化が完了しました。");
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS guild_dictionary (
+        guild_id VARCHAR(255) NOT NULL,
+        source VARCHAR(255) NOT NULL,
+        reading TEXT NOT NULL,
+
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          ON UPDATE CURRENT_TIMESTAMP,
+
+        PRIMARY KEY (guild_id, source)
+      ) ENGINE=InnoDB
+        DEFAULT CHARSET=utf8mb4
+        COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    console.log("MySQLの初期化が完了しました。");
+  } finally {
+    connection.release();
+  }
 }
 
 // --------------------------------------------------
@@ -66,35 +105,44 @@ async function initDatabase() {
 // --------------------------------------------------
 
 async function getUserSettings(guildId, userId) {
-  const result = await pool.query(
+  const [existing] = await pool.query(
+    `
+      SELECT *
+      FROM user_settings
+      WHERE guild_id = ?
+        AND user_id = ?
+      LIMIT 1
+    `,
+    [guildId, userId],
+  );
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  await pool.query(
     `
       INSERT INTO user_settings (
         guild_id,
         user_id
       )
-      VALUES ($1, $2)
-      ON CONFLICT (guild_id, user_id)
-      DO NOTHING
-      RETURNING *;
+      VALUES (?, ?)
     `,
     [guildId, userId],
   );
 
-  if (result.rows.length > 0) {
-    return result.rows[0];
-  }
-
-  const existing = await pool.query(
+  const [result] = await pool.query(
     `
       SELECT *
       FROM user_settings
-      WHERE guild_id = $1
-        AND user_id = $2
+      WHERE guild_id = ?
+        AND user_id = ?
+      LIMIT 1
     `,
     [guildId, userId],
   );
 
-  return existing.rows[0];
+  return result[0];
 }
 
 // --------------------------------------------------
@@ -113,12 +161,11 @@ async function setSpeaker(
         user_id,
         speaker
       )
-      VALUES ($1, $2, $3)
+      VALUES (?, ?, ?)
 
-      ON CONFLICT (guild_id, user_id)
-      DO UPDATE SET
-        speaker = EXCLUDED.speaker,
-        updated_at = NOW()
+      ON DUPLICATE KEY UPDATE
+        speaker = VALUES(speaker),
+        updated_at = CURRENT_TIMESTAMP
     `,
     [
       guildId,
@@ -148,16 +195,15 @@ async function setVoiceSettings(
         intonation_scale,
         volume_scale
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
 
-      ON CONFLICT (guild_id, user_id)
-      DO UPDATE SET
-        speaker = EXCLUDED.speaker,
-        speed_scale = EXCLUDED.speed_scale,
-        pitch_scale = EXCLUDED.pitch_scale,
-        intonation_scale = EXCLUDED.intonation_scale,
-        volume_scale = EXCLUDED.volume_scale,
-        updated_at = NOW()
+      ON DUPLICATE KEY UPDATE
+        speaker = VALUES(speaker),
+        speed_scale = VALUES(speed_scale),
+        pitch_scale = VALUES(pitch_scale),
+        intonation_scale = VALUES(intonation_scale),
+        volume_scale = VALUES(volume_scale),
+        updated_at = CURRENT_TIMESTAMP
     `,
     [
       guildId,
@@ -176,17 +222,17 @@ async function setVoiceSettings(
 // --------------------------------------------------
 
 async function getGuildDictionary(guildId) {
-  const result = await pool.query(
+  const [rows] = await pool.query(
     `
       SELECT source, reading
       FROM guild_dictionary
-      WHERE guild_id = $1
-      ORDER BY char_length(source) DESC, source ASC
+      WHERE guild_id = ?
+      ORDER BY CHAR_LENGTH(source) DESC, source ASC
     `,
     [guildId],
   );
 
-  return result.rows;
+  return rows;
 }
 
 async function upsertDictionaryEntry(
@@ -196,28 +242,49 @@ async function upsertDictionaryEntry(
 ) {
   await pool.query(
     `
-      INSERT INTO guild_dictionary (guild_id, source, reading)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (guild_id, source)
-      DO UPDATE SET
-        reading = EXCLUDED.reading,
-        updated_at = NOW()
+      INSERT INTO guild_dictionary (
+        guild_id,
+        source,
+        reading
+      )
+      VALUES (?, ?, ?)
+
+      ON DUPLICATE KEY UPDATE
+        reading = VALUES(reading),
+        updated_at = CURRENT_TIMESTAMP
     `,
-    [guildId, source, reading],
+    [
+      guildId,
+      source,
+      reading,
+    ],
   );
 }
 
-async function deleteDictionaryEntry(guildId, source) {
-  const result = await pool.query(
+async function deleteDictionaryEntry(
+  guildId,
+  source,
+) {
+  const [result] = await pool.query(
     `
       DELETE FROM guild_dictionary
-      WHERE guild_id = $1 AND source = $2
-      RETURNING source, reading
+      WHERE guild_id = ?
+        AND source = ?
     `,
-    [guildId, source],
+    [
+      guildId,
+      source,
+    ],
   );
 
-  return result.rows[0] ?? null;
+  if (result.affectedRows === 0) {
+    return null;
+  }
+
+  return {
+    source,
+    reading: null,
+  };
 }
 
 // --------------------------------------------------
